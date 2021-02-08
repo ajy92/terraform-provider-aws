@@ -5,7 +5,6 @@ import (
 	"log"
 	"regexp"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/route53resolver"
@@ -29,48 +28,50 @@ func testSweepRoute53ResolverDnssecConfig(region string) error {
 	}
 	conn := client.(*AWSClient).route53resolverconn
 
-	var errors error
+	var sweeperErrs *multierror.Error
 	err = conn.ListResolverDnssecConfigsPages(&route53resolver.ListResolverDnssecConfigsInput{}, func(page *route53resolver.ListResolverDnssecConfigsOutput, isLast bool) bool {
 		if page == nil {
 			return !isLast
 		}
 
 		for _, resolverDnssecConfig := range page.ResolverDnssecConfigs {
-			id := aws.StringValue(resolverDnssecConfig.ResourceId)
+			if resolverDnssecConfig == nil {
+				continue
+			}
+
+			id := aws.StringValue(resolverDnssecConfig.Id)
+			resourceId := aws.StringValue(resolverDnssecConfig.ResourceId)
 
 			log.Printf("[INFO] Deleting Route53 Resolver Dnssec config: %s", id)
-			_, err := conn.UpdateResolverDnssecConfig(&route53resolver.UpdateResolverDnssecConfigInput{
-				ResourceId: aws.String(id),
-				Validation: aws.String(route53resolver.ResolverDNSSECValidationStatusDisabled),
-			})
-			if isAWSErr(err, route53resolver.ErrCodeResourceNotFoundException, "") {
-				continue
-			}
-			if err != nil {
-				errors = multierror.Append(errors, fmt.Errorf("error deleting Route53 Resolver Resolver Dnssec config (%s): %w", id, err))
-				continue
-			}
 
-			err = route53ResolverEndpointWaitUntilTargetState(conn, id, 10*time.Minute,
-				[]string{route53resolver.ResolverDNSSECValidationStatusDisabling},
-				[]string{route53resolver.ResolverDNSSECValidationStatusDisabled})
+			r := resourceAwsRoute53ResolverDnssecConfig()
+			d := r.Data(nil)
+			d.SetId(aws.StringValue(resolverDnssecConfig.Id))
+			d.Set("resource_id", resourceId)
+
+			err := r.Delete(d, client)
+
 			if err != nil {
-				errors = multierror.Append(errors, err)
+				sweeperErr := fmt.Errorf("error deleting Route53 Resolver Resolver Dnssec config (%s): %w", id, err)
+				log.Printf("[ERROR] %s", sweeperErr)
+				sweeperErrs = multierror.Append(sweeperErrs, sweeperErr)
 				continue
 			}
 		}
 
 		return !isLast
 	})
-	if err != nil {
-		if testSweepSkipSweepError(err) {
-			log.Printf("[WARN] Skipping Route53 Resolver Resolver Dnssec config sweep for %s: %s", region, err)
-			return nil
-		}
-		errors = multierror.Append(errors, fmt.Errorf("error retrieving Route53 Resolver Resolver Dnssec config: %w", err))
+
+	if testSweepSkipSweepError(err) {
+		log.Printf("[WARN] Skipping Route53 Resolver Resolver Dnssec config sweep for %s: %s", region, err)
+		return sweeperErrs.ErrorOrNil()
 	}
 
-	return errors
+	if err != nil {
+		sweeperErrs = multierror.Append(sweeperErrs, fmt.Errorf("error retrieving Route53 Resolver Resolver Dnssec config: %w", err))
+	}
+
+	return sweeperErrs.ErrorOrNil()
 }
 
 func TestAccAWSRoute53ResolverDnssecConfig_basic(t *testing.T) {
